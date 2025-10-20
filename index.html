@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1" />
-  <title>Scrappy Jump — City Run</title>
+  <title>City Run — v2.1</title>
   <style>
     html, body { margin:0; padding:0; height:100%; }
     body { background:#0b0c10; font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial; color:#fff; display:flex; align-items:center; justify-content:center; }
@@ -16,7 +16,6 @@
     .btn { pointer-events:auto; display:inline-block; background:#ffffff10; border:1px solid #ffffff25; padding:10px 16px; border-radius:12px; backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px); }
     .title { font-size:24px; font-weight:800; margin-bottom:8px; letter-spacing:.5px; }
     .hint { opacity:.85; font-size:13px; }
-    .badge { font-size:13px; opacity:.85; }
     .pill { pointer-events:auto; background:#ffffff12; border:1px solid #ffffff25; padding:8px 10px; border-radius:10px; }
     #pauseBtn { pointer-events:auto; }
     #countdown { position:absolute; inset:0; display:flex; align-items:center; justify-content:center; font-weight:900; font-size:64px; text-shadow:0 4px 18px rgba(0,0,0,.6); pointer-events:none; }
@@ -35,11 +34,11 @@
 
       <div class="center" id="menu">
         <div class="title">🏙️ City Run</div>
-        <div class="badge" style="margin-bottom:10px">Tap anywhere to jump • Avoid obstacles</div>
+        <div style="margin-bottom:10px; opacity:.9">Tap to jump • Avoid obstacles</div>
         <div style="display:flex; gap:10px; justify-content:center; margin:10px 0 18px">
           <span class="btn" id="playBtn">Start</span>
         </div>
-        <div class="hint">Tip: Jump early; speed ramps up every 5 points.</div>
+        <div class="hint">Slower pace • Smooth ramp • Cleaner hits.</div>
       </div>
     </div>
 
@@ -56,10 +55,21 @@
     const canvas = $('#game');
     const ctx = canvas.getContext('2d');
 
+    // ---------- TUNING (easy knobs)
+    const SPEED_START   = 2.2;     // was ~3.3
+    const SPEED_RAMP    = 0.25;    // slower growth
+    const RAMP_EVERY    = 6;       // points per ramp
+    const SPEED_MAX     = 6.5;
+
+    const GRAVITY_K     = 0.0012;  // softer gravity
+    const JUMP_IMPULSE  = -9.4;    // gentler jump
+
+    const SPAWN_BASE_MS = 1150;    // slower spawns
+    const SPAWN_MIN_MS  = 620;
+
     // ---------- SPRITE
-    // If your image name is different, change the file name here:
     const sprite = new Image();
-    sprite.src = 'IMG_2100.png';     // <--- change if needed
+    sprite.src = 'IMG_2100.png';   // change if your file name is different
     let spriteReady = false;
     sprite.onload = () => spriteReady = true;
 
@@ -67,53 +77,34 @@
     let running = false;
     let paused = false;
     let tPrev = 0;
-    let screenShake = 0; // pixels
+    let screenShake = 0;
+    let slowmo = 0; // frames of slow motion after crash
     let score = 0;
     let best = parseInt(localStorage.getItem('cityrun_best')||'0',10);
     $('#best').textContent = best;
 
-    // player
-    const player = {
-      x: 64, y: 500,
-      w: 58, h: 96,    // tuned for tall character art
-      vy: 0,
-      onGround: false
-    };
+    // player (tall art)
+    const player = { x: 64, y: 500, w: 58, h: 96, vy: 0, onGround: false };
 
-    // ground line
+    // jump trail + dust
+    const trail = []; // [{x,y,alpha}]
+    const dust  = []; // landing particles
+
+    // ground + sky
     const GROUND_Y = 580;
-
-    // background layers (parallax skyline)
-    const skyline1 = []; // far buildings
-    const skyline2 = []; // near buildings
-    const stars = [];
+    const skyline1 = [], skyline2 = [], stars = [];
     function initSky() {
       skyline1.length = 0; skyline2.length = 0; stars.length = 0;
-      // stars
-      for (let i=0;i<60;i++){
-        stars.push({x:Math.random()*canvas.width, y:Math.random()*300, r:Math.random()*1.2});
-      }
-      // far buildings
-      let x=0;
-      while (x < canvas.width+120){
-        const w = rand(30,60), h = rand(80,140);
-        skyline1.push({x, y: GROUND_Y - 120 - h, w, h});
-        x += w + rand(12,24);
-      }
-      // near buildings
-      x=0;
-      while (x < canvas.width+120){
-        const w = rand(40,70), h = rand(100,180);
-        skyline2.push({x, y: GROUND_Y - 80 - h, w, h});
-        x += w + rand(16,26);
-      }
+      for (let i=0;i<60;i++) stars.push({x:Math.random()*canvas.width, y:Math.random()*300, r:Math.random()*1.2});
+      let x=0; while (x < canvas.width+120){ const w=rand(30,60), h=rand(80,140); skyline1.push({x, y: GROUND_Y - 120 - h, w, h}); x+= w + rand(12,24); }
+      x=0; while (x < canvas.width+120){ const w=rand(40,70), h=rand(100,180); skyline2.push({x, y: GROUND_Y - 80 - h, w, h}); x+= w + rand(16,26); }
     }
     initSky();
 
     // obstacles
     const obstacles = [];
     let spawnTimer = 0;
-    let speed = 3.3;
+    let speed = SPEED_START;
 
     // input
     const input = { pressed: false };
@@ -124,21 +115,13 @@
     canvas.addEventListener('pointercancel', release);
 
     // start from anywhere
-    $('#wrap').addEventListener('pointerdown', () => {
-      if (!running) startSequence();
-    });
+    $('#wrap').addEventListener('pointerdown', () => { if (!running) startSequence(); });
 
     // buttons
-    $('#playBtn').addEventListener('click', (e) => {
-      e.stopPropagation();
-      startSequence();
-    });
-
+    $('#playBtn').addEventListener('click', (e) => { e.stopPropagation(); startSequence(); });
     $('#pauseBtn').addEventListener('click', (e) => {
-      e.stopPropagation();
-      if (!running) return;
-      paused = !paused;
-      $('#pauseBtn').textContent = paused ? '▶︎' : '⏸︎';
+      e.stopPropagation(); if (!running) return;
+      paused = !paused; $('#pauseBtn').textContent = paused ? '▶︎' : '⏸︎';
       if (!paused) { tPrev = performance.now(); requestAnimationFrame(loop); }
     });
 
@@ -146,125 +129,114 @@
     function startSequence(){
       if (running) return;
       $('#menu').style.display = 'none';
-      const cd = $('#countdown');
-      cd.style.display = 'flex';
-      let n = 3;
-      cd.textContent = n;
+      const cd = $('#countdown'); cd.style.display = 'flex';
+      let n = 3; cd.textContent = n;
       const iv = setInterval(() => {
-        n--;
-        if (n === 0){ cd.textContent = 'GO'; }
-        if (n < 0){
-          clearInterval(iv);
-          cd.style.display = 'none';
-          startGame();
-        } else {
-          cd.textContent = n;
-        }
+        n--; if (n === 0) cd.textContent = 'GO';
+        if (n < 0){ clearInterval(iv); cd.style.display = 'none'; startGame(); }
+        else cd.textContent = n;
       }, 600);
     }
 
     function startGame() {
-      running = true;
-      paused = false;
-      $('#pauseBtn').textContent = '⏸︎';
-      obstacles.length = 0;
+      running = true; paused = false; $('#pauseBtn').textContent = '⏸︎';
+      obstacles.length = 0; trail.length = 0; dust.length = 0;
       player.x = 64; player.y = 500; player.vy = 0; player.onGround = true;
-      score = 0;
-      speed = 3.3;
-      spawnTimer = 0;
-      screenShake = 0;
-      initSky();
-      $('#score').textContent = score;
-      tPrev = performance.now();
-      requestAnimationFrame(loop);
+      score = 0; speed = SPEED_START; spawnTimer = 0; screenShake = 0; slowmo = 0;
+      initSky(); $('#score').textContent = score;
+      tPrev = performance.now(); requestAnimationFrame(loop);
     }
 
     function gameOver() {
       running = false;
-      $('#menu').style.display = 'block';
-      $('#playBtn').textContent = 'Play Again';
-      best = Math.max(best, score);
-      localStorage.setItem('cityrun_best', best);
-      $('#best').textContent = best;
+      slowmo = 18; // short slow motion
+      $('#menu').style.display = 'block'; $('#playBtn').textContent = 'Play Again';
+      best = Math.max(best, score); localStorage.setItem('cityrun_best', best); $('#best').textContent = best;
     }
 
-    // two obstacle types: box + drone (moving)
+    // two types: box + drone
     function spawnObstacle() {
-      const type = Math.random() < 0.25 ? 'drone' : 'box';
+      const type = Math.random() < 0.22 ? 'drone' : 'box';
       if (type === 'box') {
-        const size = 28 + Math.random()*28; // 28–56
+        const size = 30 + Math.random()*26; // 30–56
         obstacles.push({ type, x: canvas.width + 20, y: GROUND_Y - size, w: size, h: size });
       } else {
-        const w = 28, h = 28;
-        const baseY = GROUND_Y - 140 - Math.random()*100;
+        const w = 28, h = 28, baseY = GROUND_Y - 140 - Math.random()*100;
         obstacles.push({ type, x: canvas.width + 20, y: baseY, baseY, w, h, t: 0 });
       }
     }
 
     function update(dt) {
+      // slow-mo after crash
+      if (slowmo > 0) { dt *= 0.35; slowmo--; }
+
       // spawn
       spawnTimer -= dt;
       if (spawnTimer <= 0) {
         spawnObstacle();
-        const base = 900;
-        spawnTimer = base - Math.min(650, score*5); // ms
+        const next = Math.max(SPAWN_MIN_MS, SPAWN_BASE_MS - score*18);
+        spawnTimer = next; // ms
       }
 
       // gravity + move
-      player.vy += 0.0015 * dt * 60;
-      player.y += player.vy;
+      player.vy += GRAVITY_K * dt * 60;
+      player.y  += player.vy;
 
-      // ground collision
+      // ground collision + landing dust
       if (player.y + player.h >= GROUND_Y) {
+        if (!player.onGround && player.vy > 2) {
+          // spawn landing dust puffs
+          for (let i=0;i<6;i++){
+            dust.push({x: player.x + player.w/2 + rand(-8,8), y: GROUND_Y-2, vx: rand(-1.2,1.2), vy: rand(-1.8,-0.6), a: 0.7, r: rand(2,4)});
+          }
+        }
         player.y = GROUND_Y - player.h;
-        player.vy = 0;
-        player.onGround = true;
-      } else {
-        player.onGround = false;
-      }
+        player.vy = 0; player.onGround = true;
+      } else { player.onGround = false; }
 
-      // jump
-      if (input.pressed && player.onGround) {
-        player.vy = -10.9;
-        player.onGround = false;
+      // jump + trail
+      if (input.pressed && player.onGround) { player.vy = JUMP_IMPULSE; player.onGround = false; }
+      if (!player.onGround) {
+        trail.push({x: player.x+player.w/2, y: player.y+player.h-8, a: .5});
+        if (trail.length > 12) trail.shift();
+      } else {
+        // fade trail on ground
+        for (const t of trail) t.a *= 0.85;
+        while (trail.length && trail[0].a < 0.05) trail.shift();
       }
 
       // parallax move
-      const sky1Speed = speed * 0.25 * (dt/16.67);
-      const sky2Speed = speed * 0.45 * (dt/16.67);
-
+      const sky1Speed = speed * 0.20 * (dt/16.67);
+      const sky2Speed = speed * 0.38 * (dt/16.67);
       skyline1.forEach(b => b.x -= sky1Speed);
       skyline2.forEach(b => b.x -= sky2Speed);
-
-      // recycle buildings
       recycleSky(skyline1, 30,60, 80,140, GROUND_Y-120);
       recycleSky(skyline2, 40,70, 100,180, GROUND_Y-80);
 
       // obstacles move
       for (const o of obstacles) {
-        o.x -= speed * (dt/16.67) * 3.3;
-        if (o.type === 'drone') {
-          o.t += dt / 1000;
-          o.y = o.baseY + Math.sin(o.t * 3) * 18;
-        }
+        o.x -= speed * (dt/16.67) * 3.0;  // slightly slower world speed
+        if (o.type === 'drone') { o.t += dt / 1000; o.y = o.baseY + Math.sin(o.t * 3) * 16; }
       }
 
-      // remove offscreen + score
+      // remove offscreen + score + ramp
       while (obstacles.length && obstacles[0].x + obstacles[0].w < 0) {
-        obstacles.shift();
-        score++;
-        $('#score').textContent = score;
-        if (score % 5 === 0) speed = Math.min(8, speed + 0.35);
+        obstacles.shift(); score++; $('#score').textContent = score;
+        if (score % RAMP_EVERY === 0) speed = Math.min(SPEED_MAX, speed + SPEED_RAMP);
       }
 
-      // collisions (AABB)
+      // dust physics
+      for (const p of dust){ p.x += p.vx; p.y += p.vy; p.vy += 0.08; p.a *= 0.95; }
+      while (dust.length && dust[0].a < 0.06) dust.shift();
+
+      // collisions using VISUAL rect (matches the drawn sprite)
+      const vRect = { x: player.x - 6, y: player.y - 12, w: player.w + 24, h: player.h + 40 }; // small padding
       for (const o of obstacles) {
-        if (player.x < o.x + o.w &&
-            player.x + player.w > o.x &&
-            player.y < o.y + o.h &&
-            player.y + player.h > o.y) {
-          screenShake = 10; // shake on hit
-          gameOver();
+        if (vRect.x < o.x + o.w &&
+            vRect.x + vRect.w > o.x &&
+            vRect.y < o.y + o.h &&
+            vRect.y + vRect.h > o.y) {
+          screenShake = 10; gameOver();
         }
       }
 
@@ -273,7 +245,6 @@
     }
 
     function recycleSky(arr, wmin,wmax, hmin,hmax, baseY){
-      // drop gone, add new to right
       if (arr.length && arr[0].x + arr[0].w < -80){
         arr.shift();
         const lastX = arr.length ? arr[arr.length-1].x + arr[arr.length-1].w : 0;
@@ -283,101 +254,69 @@
     }
 
     function drawBackground(){
-      // gradient sky
+      // gradient
       const g = ctx.createLinearGradient(0,0,0,canvas.height);
-      g.addColorStop(0, '#111522');
-      g.addColorStop(0.5, '#0e1320');
-      g.addColorStop(1, '#0b0c10');
-      ctx.fillStyle = g;
-      ctx.fillRect(0,0,canvas.width,canvas.height);
+      g.addColorStop(0, '#111522'); g.addColorStop(0.5, '#0e1320'); g.addColorStop(1, '#0b0c10');
+      ctx.fillStyle = g; ctx.fillRect(0,0,canvas.width,canvas.height);
 
       // stars
-      ctx.globalAlpha = .65;
-      ctx.fillStyle = '#cfd7ff';
-      for (const s of stars){
-        ctx.beginPath(); ctx.arc(s.x, s.y, s.r, 0, Math.PI*2); ctx.fill();
-      }
+      ctx.globalAlpha = .65; ctx.fillStyle = '#cfd7ff';
+      for (const s of stars){ ctx.beginPath(); ctx.arc(s.x, s.y, s.r, 0, Math.PI*2); ctx.fill(); }
       ctx.globalAlpha = 1;
 
       // far skyline
-      ctx.fillStyle = '#141a2a';
-      for (const b of skyline1){
-        ctx.fillRect(b.x, b.y, b.w, b.h);
-      }
+      ctx.fillStyle = '#141a2a'; for (const b of skyline1){ ctx.fillRect(b.x, b.y, b.w, b.h); }
 
-      // near skyline with windows
+      // near skyline + windows
       ctx.fillStyle = '#192136';
       for (const b of skyline2){
         ctx.fillRect(b.x, b.y, b.w, b.h);
-        // windows
         ctx.fillStyle = '#2a3553';
         for (let y=b.y+8; y<b.y+b.h-8; y+=12){
-          for (let x=b.x+5; x<b.x+b.w-5; x+=10){
-            if (Math.random() < 0.18) ctx.fillRect(x,y,3,6);
-          }
+          for (let x=b.x+5; x<b.x+b.w-5; x+=10){ if (Math.random() < 0.18) ctx.fillRect(x,y,3,6); }
         }
         ctx.fillStyle = '#192136';
       }
 
-      // road
-      ctx.fillStyle = '#1b1f2c';
-      ctx.fillRect(0, GROUND_Y, canvas.width, canvas.height - GROUND_Y);
-      // lane stripes
-      ctx.fillStyle = '#242a3b';
-      for (let i=0;i<5;i++){
-        const y = GROUND_Y - 8 - i*60;
-        ctx.fillRect(0, y, canvas.width, 2);
-      }
+      // road + stripes
+      ctx.fillStyle = '#1b1f2c'; ctx.fillRect(0, GROUND_Y, canvas.width, canvas.height - GROUND_Y);
+      ctx.fillStyle = '#242a3b'; for (let i=0;i<5;i++){ const y = GROUND_Y - 8 - i*60; ctx.fillRect(0, y, canvas.width, 2); }
     }
 
     function draw() {
-      // apply screen shake
       const sx = screenShake ? (Math.random()*2-1)*screenShake : 0;
       const sy = screenShake ? (Math.random()*2-1)*screenShake : 0;
-      ctx.save();
-      ctx.translate(sx, sy);
+      ctx.save(); ctx.translate(sx, sy);
 
       drawBackground();
 
       // obstacles
       for (const o of obstacles) {
         if (o.type === 'box') {
-          ctx.fillStyle = '#e9e9ef';
-          ctx.fillRect(o.x, o.y, o.w, o.h);
-          ctx.strokeStyle = 'rgba(255,255,255,.25)';
-          ctx.lineWidth = 2;
+          ctx.fillStyle = '#e9e9ef'; ctx.fillRect(o.x, o.y, o.w, o.h);
+          ctx.strokeStyle = 'rgba(255,255,255,.25)'; ctx.lineWidth = 2;
           ctx.strokeRect(o.x+0.5, o.y+0.5, o.w-1, o.h-1);
         } else {
           // drone
-          ctx.fillStyle = '#cfe1ff';
-          ctx.fillRect(o.x, o.y, o.w, o.h);
-          ctx.fillRect(o.x-6, o.y+10, o.w+12, 2); // prop bar
+          ctx.fillStyle = '#cfe1ff'; ctx.fillRect(o.x, o.y, o.w, o.h);
+          ctx.fillRect(o.x-6, o.y+10, o.w+12, 2);
         }
       }
 
-      // ----- PLAYER (sprite with fallback)
-      const r = player.w/2;
-      const cx = player.x + r, cy = player.y + r;
-
-      if (spriteReady) {
-        // tweak these numbers to position/scale the art
-        ctx.drawImage(sprite, player.x - 8, player.y - 18, player.w + 28, player.h + 44);
-      } else {
-        // simple fallback while image loads
-        const grad = ctx.createRadialGradient(cx-6, cy-6, 6, cx, cy, r+6);
-        grad.addColorStop(0, '#ffffff');
-        grad.addColorStop(1, '#c6c7d1');
-        ctx.fillStyle = grad;
-        ctx.beginPath();
-        ctx.arc(cx, cy, r, 0, Math.PI*2);
-        ctx.fill();
+      // jump trail
+      for (const t of trail){
+        ctx.globalAlpha = t.a;
+        ctx.beginPath(); ctx.ellipse(t.x, t.y, 10, 4, 0, 0, Math.PI*2); ctx.fillStyle = '#ffffff22'; ctx.fill();
       }
+      ctx.globalAlpha = 1;
 
-      // shadow
-      ctx.globalAlpha = .25;
-      ctx.beginPath();
-      ctx.ellipse(cx, GROUND_Y+7, r*1.3, r*.5, 0, 0, Math.PI*2);
-      ctx.fill();
+      // player (sprite with fallback)
+      const r = player.w/2, cx = player.x + r, cy = player.y + r;
+      if (spriteReady) ctx.drawImage(sprite, player.x - 8, player.y - 18, player.w + 28, player.h + 44);
+      else { const grad = ctx.createRadialGradient(cx-6, cy-6, 6, cx, cy, r+6); grad.addColorStop(0, '#ffffff'); grad.addColorStop(1, '#c6c7d1'); ctx.fillStyle = grad; ctx.beginPath(); ctx.arc(cx, cy, r, 0, Math.PI*2); ctx.fill(); }
+
+      // landing dust
+      for (const p of dust){ ctx.globalAlpha = p.a; ctx.beginPath(); ctx.arc(p.x, p.y, p.r, 0, Math.PI*2); ctx.fillStyle = '#ffffff26'; ctx.fill(); }
       ctx.globalAlpha = 1;
 
       ctx.restore();
@@ -387,16 +326,11 @@
       if (paused) return;
       const dt = clamp(tNow - tPrev, 0, 50);
       tPrev = tNow;
-      if (running) {
-        update(dt);
-        draw();
-        requestAnimationFrame(loop);
-      } else {
-        draw();
-      }
+      if (running) { update(dt); draw(); requestAnimationFrame(loop); }
+      else { draw(); }
     }
 
-    // initial frame
+    // first frame
     draw();
   </script>
 </body>
