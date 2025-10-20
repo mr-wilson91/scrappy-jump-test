@@ -37,39 +37,35 @@
   </div>
 
   <script>
-    // --- helpers
+    // ---------- helpers
     const $ = s => document.querySelector(s);
     const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
 
-    // --- canvas setup
+    // ---------- canvas
     const canvas = $('#game');
     const ctx = canvas.getContext('2d');
-// Add character image
-const sprite = new Image();
-sprite.src = 'character.png'; // use the exact file name you uploaded
-let spriteReady = false;
-sprite.onload = () => spriteReady = true;
-    // --- game state
+
+    // ---------- SPRITE (your character)
+    // Put character.png in the same folder as index.html.
+    const sprite = new Image();
+    sprite.src = 'character.png';
+    let spriteReady = false;
+    sprite.onload = () => spriteReady = true;
+
+    // ---------- game state
     let running = false;
     let tPrev = 0;
     let score = 0;
     let best = parseInt(localStorage.getItem('scrappy_best')||'0',10);
-
     $('#best').textContent = best;
 
-    // Draw character instead of circle
-const r = player.w / 2;
-const cx = player.x + r, cy = player.y + r;
-
-if (spriteReady) {
-  ctx.drawImage(sprite, player.x - 5, player.y - 10, player.w + 20, player.h + 30);
-} else {
-  // fallback white circle while image loads
-  ctx.fillStyle = '#fff';
-  ctx.beginPath();
-  ctx.arc(cx, cy, r, 0, Math.PI * 2);
-  ctx.fill();
-}
+    // player
+    const player = {
+      x: 70, y: 520,
+      w: 48, h: 64,        // slightly taller for your character art
+      vy: 0,
+      onGround: false
+    };
 
     // ground line
     const GROUND_Y = 580;
@@ -86,12 +82,13 @@ if (spriteReady) {
     canvas.addEventListener('pointerdown', press);
     canvas.addEventListener('pointerup', release);
     canvas.addEventListener('pointercancel', release);
-    // allow whole wrapper to start game
+
+    // start from anywhere
     $('#wrap').addEventListener('pointerdown', () => {
       if (!running) startGame();
     });
 
-    // buttons
+    // button start
     $('#playBtn').addEventListener('click', (e) => {
       e.stopPropagation();
       startGame();
@@ -101,7 +98,10 @@ if (spriteReady) {
       running = true;
       $('#menu').style.display = 'none';
       obstacles.length = 0;
-      player.y = 520; player.vy = 0; player.onGround = true;
+      player.x = 70;
+      player.y = 520;
+      player.vy = 0;
+      player.onGround = true;
       score = 0;
       speed = 3.2;
       spawnTimer = 0;
@@ -119,7 +119,6 @@ if (spriteReady) {
     }
 
     function spawnObstacle() {
-      // simple box; later you can randomize height/width/sprites
       const size = 36 + Math.random()*14; // 36-50
       obstacles.push({ x: canvas.width + 20, y: GROUND_Y - size, w: size, h: size });
     }
@@ -129,14 +128,12 @@ if (spriteReady) {
       spawnTimer -= dt;
       if (spawnTimer <= 0) {
         spawnObstacle();
-        // spawn faster as score increases
         const base = 900;
         spawnTimer = base - Math.min(650, score*5); // ms
       }
 
-      // movement
-      // gravity
-      player.vy += 0.0015 * dt * 60; // scale gravity by dt
+      // gravity + move
+      player.vy += 0.0015 * dt * 60;
       player.y += player.vy;
 
       // ground collision
@@ -150,7 +147,7 @@ if (spriteReady) {
 
       // jump
       if (input.pressed && player.onGround) {
-        player.vy = -10.8; // jump impulse
+        player.vy = -10.8;
         player.onGround = false;
       }
 
@@ -162,7 +159,6 @@ if (spriteReady) {
         obstacles.shift();
         score++;
         $('#score').textContent = score;
-        // increase difficulty every few points
         if (score % 5 === 0) speed = Math.min(7.5, speed + 0.3);
       }
 
@@ -185,7 +181,7 @@ if (spriteReady) {
       ctx.fillStyle = '#1e212c';
       ctx.fillRect(0, GROUND_Y, canvas.width, canvas.height - GROUND_Y);
 
-      // lane stripes for subtle motion
+      // lane stripes
       ctx.fillStyle = '#252938';
       for (let i=0;i<6;i++){
         const y = GROUND_Y - 10 - i*60;
@@ -194,7 +190,6 @@ if (spriteReady) {
 
       // obstacles
       for (const o of obstacles) {
-        // box with border
         ctx.fillStyle = '#e9e9ef';
         ctx.fillRect(o.x, o.y, o.w, o.h);
         ctx.strokeStyle = 'rgba(255,255,255,.25)';
@@ -202,22 +197,24 @@ if (spriteReady) {
         ctx.strokeRect(o.x+0.5, o.y+0.5, o.w-1, o.h-1);
       }
 
-      // player (Scrappy token)
-      // base circle
+      // ----- PLAYER (sprite with fallback)
       const r = player.w/2;
       const cx = player.x + r, cy = player.y + r;
-      const grad = ctx.createRadialGradient(cx-6, cy-6, 6, cx, cy, r+6);
-      grad.addColorStop(0, '#ffffff');
-      grad.addColorStop(1, '#c6c7d1');
-      ctx.fillStyle = grad;
-      ctx.beginPath();
-      ctx.arc(cx, cy, r, 0, Math.PI*2);
-      ctx.fill();
-      // tiny ear
-      ctx.fillStyle = '#0f0f12';
-      ctx.beginPath();
-      ctx.arc(cx+6, cy-8, 4, 0, Math.PI*2);
-      ctx.fill();
+
+      if (spriteReady) {
+        // tweak these numbers to size/position your art
+        ctx.drawImage(sprite, player.x - 6, player.y - 12, player.w + 24, player.h + 36);
+      } else {
+        // simple fallback while image loads
+        const grad = ctx.createRadialGradient(cx-6, cy-6, 6, cx, cy, r+6);
+        grad.addColorStop(0, '#ffffff');
+        grad.addColorStop(1, '#c6c7d1');
+        ctx.fillStyle = grad;
+        ctx.beginPath();
+        ctx.arc(cx, cy, r, 0, Math.PI*2);
+        ctx.fill();
+      }
+
       // shadow
       ctx.globalAlpha = .25;
       ctx.beginPath();
@@ -227,18 +224,18 @@ if (spriteReady) {
     }
 
     function loop(tNow){
-      const dt = clamp(tNow - tPrev, 0, 50); // ms clamp
+      const dt = clamp(tNow - tPrev, 0, 50);
       tPrev = tNow;
       if (running) {
         update(dt);
         draw();
         requestAnimationFrame(loop);
       } else {
-        draw(); // draw final frame under menu
+        draw();
       }
     }
 
-    // initial draw
+    // first frame
     draw();
   </script>
 </body>
